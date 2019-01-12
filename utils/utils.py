@@ -3,6 +3,12 @@ import torch
 
 
 def iou_np(boxes_1: np.array, boxes_2: np.array, style='xywh'):
+    """
+    :param boxes_1: A 1D or 2D-Array with the boxes on the last dimension.
+    :param boxes_2: A 1D or 2D-Array with the boxes on the last dimension.
+    :param style: Till now only 'xywh' style is supported.
+    :return:
+    """
     assert style == 'xywh'
     assert boxes_1.shape == boxes_2.shape
     if boxes_1.ndim == 1:
