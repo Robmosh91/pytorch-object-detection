@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from utils.utils import parse_config
+
 
 class Darknet(nn.Module):
     def __init__(self, configfile):
@@ -9,4 +11,4 @@ class Darknet(nn.Module):
         :param configfile:
         """
         super(Darknet, self).__init__()
-        self.blocks = parse_cfg(configfile)
+        self.blocks = parse_config(configfile)
