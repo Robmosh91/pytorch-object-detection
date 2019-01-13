@@ -78,10 +78,10 @@ def parse_config(configfile: str):
             if len(block) != 0:  # If block is not empty, implies it is storing values of previous block.
                 blocks.append(block)  # add it the blocks list
                 block = {}  # re-init the block
-            block["type"] = line[1:-1].rstrip()
+            block["type"] = line.strip(' []')
         else:
             key, value = line.split("=")
-            block[key.rstrip()] = value.lstrip()
+            block[key.strip()] = value.strip()
     blocks.append(block)
 
     return blocks
