@@ -12,7 +12,7 @@ class Darknet(nn.Module):
         """
         super(Darknet, self).__init__()
         self.blocks = parse_config(configfile)
-        self.model = self.create_model(blocks=self.blocks)
+        self.info, self.model = self.create_model(blocks=self.blocks)
 
     def create_model(self, blocks: list):
         assert blocks[0]['type'] == 'net', \
@@ -26,8 +26,8 @@ class Darknet(nn.Module):
         out_strides = []
         conv_id = 0
         for index, block in enumerate(blocks):
+            module = nn.Sequential()
             if block['type'] == 'convolutional':
-                conv_id += 1
                 batch_normalize = int(block.get('batch_normalize', '0'))
                 bias = bool(1 - batch_normalize)
                 filters = int(block['filters'])
@@ -36,36 +36,36 @@ class Darknet(nn.Module):
                 is_pad = int(block['pad'])
                 pad = (kernel_size - 1) // 2 if is_pad else 0
                 activation = block['activation']
-                module = nn.Sequential()
-                module.add_module('conv{0}'.format(conv_id),
+                module.add_module('conv_{0}'.format(index),
                                   nn.Conv2d(prev_filters, filters, kernel_size, stride, pad, bias=bias))
                 if batch_normalize:
-                    module.add_module('bn{0}'.format(conv_id), nn.BatchNorm2d(filters))
+                    module.add_module('batchnorm_{0}'.format(index), nn.BatchNorm2d(filters))
                 if activation == 'leaky':
-                    module.add_module('leaky{0}'.format(conv_id), nn.LeakyReLU(0.1, inplace=True))
+                    module.add_module('leaky_{0}'.format(index), nn.LeakyReLU(0.1, inplace=True))
                 prev_filters = filters
                 prev_stride = stride * prev_stride
             elif block['type'] == 'route':
                 layers = block['layers'].split(',')
-                ind = len(modules)
-                layers = [int(i) if int(i) > 0 else int(i) + ind for i in layers]
+                layers = [int(i) if int(i) > 0 else int(i) + index for i in layers]
                 if len(layers) == 1:
                     prev_filters = out_filters[layers[0]]
                     prev_stride = out_strides[layers[0]]
                 elif len(layers) == 2:
-                    assert (layers[0] == ind - 1)
+                    assert (layers[0] == index - 1)
                     prev_filters = out_filters[layers[0]] + out_filters[layers[1]]
                     prev_stride = out_strides[layers[0]]
-                module = Empty()
+                route = Empty()
+                module.add_module("route_{0}".format(index), route)
             elif block['type'] == 'shortcut':
-                ind = len(modules)
-                prev_filters = out_filters[ind - 1]
-                prev_stride = out_strides[ind - 1]
-                module = Empty()
+                prev_filters = out_filters[index - 1]
+                prev_stride = out_strides[index - 1]
+                shortcut = Empty()
+                module.add_module("shortcut_{}".format(index), shortcut)
             elif block['type'] == 'upsample':
                 stride = int(block['stride'])
                 prev_stride = prev_stride // stride
-                module = Upsample(stride)
+                upsample = Interpolate(scale_factor=stride, mode='bilinear')
+                module.add_module("upsample_{}".format(index), upsample)
             elif block['type'] == 'yolo':
                 yolo_layer = Yolo()
                 anchors = block['anchors'].split(',')
@@ -76,13 +76,13 @@ class Darknet(nn.Module):
                 yolo_layer.num_anchors = int(block['num'])
                 yolo_layer.anchor_step = len(yolo_layer.anchors) // yolo_layer.num_anchors
                 yolo_layer.stride = prev_stride
-                module = yolo_layer
+                module.add_module("yolo_{}".format(index), yolo_layer)
             else:
                 raise ValueError('Unknown block type %s not recognized.' % (block['type']))
             out_filters.append(prev_filters)
             out_strides.append(prev_stride)
             modules.append(module)
-        return modules
+        return net_info, modules
 
 
 class Empty(nn.Module):
@@ -90,6 +90,21 @@ class Empty(nn.Module):
         super(Empty, self).__init__()
 
     def forward(self, x):
+        return x
+
+
+class Interpolate(nn.Module):
+    def __init__(self, size=None, scale_factor=None, mode='bilinear', align_corners=None):
+        super(Interpolate, self).__init__()
+        self.name = type(self).__name__
+        self.interpolate = nn.functional.interpolate
+        self.size = size
+        self.scale_factor = scale_factor
+        self.mode = mode
+        self.align_corners = align_corners
+
+    def forward(self, x):
+        x = self.interpolate(x, size=self.size, mode=self.mode, align_corners=False)
         return x
 
 
@@ -121,7 +136,7 @@ class Yolo(nn.Module):
         self.num_classes = num_classes
         self.anchors = anchors
         self.num_anchors = num_anchors
-        self.anchor_step = len(anchors) / num_anchors
+        self.anchor_step = int(len(anchors) / num_anchors)
         self.coord_scale = 1
         self.noobject_scale = 1
         self.object_scale = 5
@@ -136,5 +151,6 @@ class Yolo(nn.Module):
         for m in self.anchor_mask:
             masked_anchors += self.anchors[m * self.anchor_step:(m + 1) * self.anchor_step]
         masked_anchors = [anchor / self.stride for anchor in masked_anchors]
-        boxes = get_region_boxes(output.data, self.thresh, self.num_classes, masked_anchors, len(self.anchor_mask))
+        boxes = get_region_boxes(output=output.data, conf_thresh=self.thresh, num_classes=self.num_classes,
+                                 anchors=masked_anchors, num_anchors=len(self.anchor_mask))
         return boxes
